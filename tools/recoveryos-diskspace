@@ -1,0 +1,73 @@
+#!/bin/sh
+. /usr/local/bin/recoveryos-mountlib
+G='\033[0;32m'; GB='\033[1;32m'; YL='\033[1;33m'; RD='\033[1;31m'; R='\033[0m'
+STATE=/run/recoveryos
+MNT=/mnt/analyze
+mkdir -p "$MNT"
+VERBOSE=0
+[ -f "$STATE/verbose" ] && VERBOSE=$(cat "$STATE/verbose" 2>/dev/null)
+
+pause() { printf "\n  ${GB}Press ENTER to continue...${R}"; read x; }
+finish() { sync; umount "$MNT" 2>/dev/null; }
+
+clear
+printf "\n  ${GB}=== Disk Space Analyzer ===${R}\n\n"
+printf "  ${G}Shows what is using space, biggest first.${R}\n"
+printf "  ${G}Read-only: nothing can be deleted or changed.${R}\n\n"
+
+WIN_FOUND=0; WIN_PART=""; WIN_VER=""
+[ -f "$STATE/win.conf" ] && . "$STATE/win.conf" 2>/dev/null
+
+printf "  ${GB}Available partitions:${R}\n\n"
+i=0
+lsblk -p -n -P -o NAME,SIZE,FSTYPE,TYPE,LABEL 2>/dev/null > /tmp/ros_parts
+while IFS= read -r line; do
+        eval "$line" 2>/dev/null
+        [ "$TYPE" = "part" ] || continue
+        [ -z "$FSTYPE" ] && continue
+        i=$((i+1))
+        eval "DEV_$i=\$NAME"
+        mark=""
+        [ "$NAME" = "$WIN_PART" ] && mark="${GB} <- Windows${R}"
+        printf "    ${GB}[%s]${R} ${G}%-11s %-7s %-6s %s${R}%b\n" "$i" "$NAME" "$SIZE" "$FSTYPE" "$LABEL" "$mark"
+done < /tmp/ros_parts
+COUNT=$i
+rm -f /tmp/ros_parts
+
+if [ "$COUNT" = "0" ]; then
+        printf "\n  ${RD}No mountable partitions found.${R}\n"
+        pause; exit 0
+fi
+
+printf "\n  ${GB}Pick partition to analyze (1-$COUNT, Q to cancel):${R} "
+read CH
+case "$CH" in q|Q|"") exit 0 ;; esac
+eval "TARGET=\$DEV_$CH"
+if [ -z "$TARGET" ]; then
+        printf "  ${RD}Invalid choice.${R}\n"; pause; exit 0
+fi
+
+FST=$(blkid -o value -s TYPE "$TARGET" 2>/dev/null)
+[ "$VERBOSE" = "1" ] && printf "\n  ${G}Mounting $TARGET ($FST) read-only at $MNT...${R}\n"
+if ros_mount_ro "$TARGET" "$MNT"; then
+        :
+else
+        printf "  ${RD}Could not mount $TARGET even read-only.${R}\n"
+        ros_verr "ntfs-3g said:"
+        printf "  ${YL}Likely BitLocker/encryption or a failing disk.${R}\n"
+        pause; exit 0
+fi
+
+[ "$VERBOSE" = "1" ] && { printf "  ${G}Running: ncdu -x -r $MNT${R}\n"; sleep 1; }
+printf "\n  ${GB}Scanning $TARGET ... (large drives take a moment)${R}\n"
+sleep 1
+clear
+printf '\033]P765e15d' > /dev/tty1 2>/dev/null
+ncdu -x -r --color off "$MNT"
+printf '\033]P7aaaaaa' > /dev/tty1 2>/dev/null
+
+finish
+clear
+printf "\n  ${GB}Done. Partition unmounted safely.${R}\n"
+printf "  ${G}Tip: arrow keys navigate, Q quits inside ncdu.${R}\n"
+pause

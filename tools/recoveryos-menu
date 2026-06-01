@@ -1,0 +1,198 @@
+#!/bin/sh
+ESC=$(printf '\033')
+trap '' INT TSTP QUIT
+printf '\033]P265e15d' > /dev/tty1 2>/dev/null
+G='\033[0;32m'; GB='\033[1;32m'; YL='\033[1;33m'; R='\033[0m'
+STATE=/run/recoveryos
+mkdir -p "$STATE" 2>/dev/null
+
+/usr/local/bin/recoveryos-screenfit 2>/dev/null
+COLS=80
+[ -f "$STATE/screen.conf" ] && . "$STATE/screen.conf" 2>/dev/null
+case "$SCR_COLS" in ''|*[!0-9]*) ;; *) COLS=$SCR_COLS ;; esac
+[ "$COLS" -lt 80 ] && COLS=80
+PADN=$(((COLS - 80) / 2))
+OFF=$(printf "%${PADN}s" "")
+
+P="${OFF}            "
+BAR="+------------------------------------------------------+"
+
+get_verbose() { [ -f "$STATE/verbose" ] && cat "$STATE/verbose" 2>/dev/null || echo 0; }
+get_json() { [ -f "$STATE/json" ] && cat "$STATE/json" 2>/dev/null || echo 0; }
+
+run_report() {
+	if [ "$(get_json)" = "1" ]; then
+		. /usr/local/bin/recoveryos-jsonlib
+		clear
+		printf "\n  ${GB}=== JSON: $1 ===${R}\n\n"
+		case "$1" in
+			sysinfo)    json_system ;;
+			diskhealth) json_disks ;;
+			wifi)       json_wifi ;;
+			crashlogs)  json_crashlogs ;;
+			sensors)    json_sensors ;;
+			netdiag)    json_network ;;
+		esac
+		printf "\n\n  ${GB}Press ENTER to continue...${R}"; read x
+	else
+		/usr/local/bin/recoveryos-"$1"
+	fi
+}
+
+drop_shell() {
+	clear
+	printf "\n  ${GB}=== Shell ===${R}\n\n"
+	printf "  ${G}Root command line. Type 'exit' to return to menu.${R}\n"
+	printf "  ${G}Useful: lsblk -f   blkid   mount -t ntfs-3g DEV /mnt${R}\n\n"
+	trap - INT TSTP QUIT
+	/bin/sh -i
+	trap '' INT TSTP QUIT
+}
+
+show_logo() {
+	printf "${GB}"
+	cat <<'ART' | sed "s/^/${OFF}/"
+              ____                                       ___  ____
+             |  _ \ ___  ___ _____   _____ _ __ _   _   / _ \/ ___|
+             | |_) / _ \/ __/ _ \ \ / / _ \ '__| | | | | | | \___ \
+             |  _ <  __/ (_| (_) \ V /  __/ |  | |_| | | |_| |___) |
+             |_| \_\___|\___\___/ \_/ \___|_|   \__, |  \___/|____/
+                                                |___/
+ART
+	printf "${R}${G}${OFF}                        Offline Windows Recovery Toolkit${R}\n\n"
+}
+
+show_status() {
+	WIN_FOUND=0; WIN_VER=""; WIN_PART=""
+	[ -f "$STATE/win.conf" ] && . "$STATE/win.conf" 2>/dev/null
+	if [ "$WIN_FOUND" = "1" ]; then
+		DET="${GB}$WIN_VER${R}${G} on ${GB}$WIN_PART${R}"
+	else
+		DET="${YL}No Windows partition found${R}"
+	fi
+	if [ "$(get_verbose)" = "1" ]; then VB="${GB}ON${R}"; else VB="${G}OFF${R}"; fi
+	if [ "$(get_json)" = "1" ]; then JB="${GB}ON${R}"; else JB="${G}OFF${R}"; fi
+	printf "${P}${G}Detected: ${R}${DET}\n"
+	printf "${P}${G}Verbose : ${R}${VB}   ${G}JSON: ${R}${JB}\n\n"
+}
+
+item() {
+	printf "${P}${G}|${R}    ${GB}%s${R} ${G}%-45s${R}${G}|${R}\n" "$1" "$2"
+}
+item2() {
+	printf "${P}${G}|${R}    ${GB} %s${R} ${G}%-44s${R}${G}|${R}\n" "$1" "$2"
+}
+blank() { printf "${P}${G}|%44s|${R}\n" ""; }
+
+show_menu() {
+	clear
+	show_logo
+	show_status
+	printf "${P}${G}${BAR}${R}\n"
+	printf "${P}${G}|${R}${GB}%*s%s%*s${R}${G}|${R}\n" 13 "" "=== System Toolkit Menu ===" 14 ""
+	printf "${P}${G}${BAR}${R}\n"
+	item " [1]" "Reset Windows Password"
+	item " [2]" "Recover WiFi Passwords"
+	item " [3]" "Rescue User Files"
+	item " [4]" "Smart File Recovery"
+	item " [5]" "System Information Report"
+	item " [6]" "Disk Health Check"
+	item " [7]" "Disk Space Analyzer"
+	item " [8]" "Disk Tools (Wipe/Partition)"
+	item " [9]" "Network Diagnostics"
+	item2 "[10]" "Temperature & Sensors"
+	item2 "[11]" "Rootkit/Malware Scan"
+	item2 "[12]" "Export JSON Report"
+	item2 "[13]" "View Crash Logs"
+item2 "[14]" "Disk Report"
+	item " [H]" "Help"
+	item " [S]" "Shell (root command line)"
+item " [A]" "About"
+	printf "${P}${G}${BAR}${R}\n"
+	printf "${P}${G}|${R} ${G}%-53s${R}${G}|${R}\n" "Choice 1-14 [S]hell [V] [J] [A]bout [H]elp [Q]uit:"
+	printf "${P}${G}${BAR}${R}\n"
+	printf "${P}${GB} > ${R}${ESC}7${ESC}[9999;1H${G}by @SparklyBird${R}${ESC}8"
+}
+
+show_help() {
+clear
+printf "  ${GB}=== Help ===${R}
+
+"
+printf "  ${GB}[1] Reset Windows Password:${R} ${G}blank a local account.${R}
+"
+printf "  ${GB}[2] Recover WiFi Passwords:${R} ${G}decrypt saved keys offline.${R}
+"
+printf "  ${GB}[3] Rescue User Files:${R} ${G}copy to drive, SMB, or SSH.${R}
+"
+printf "  ${GB}[4] Smart File Recovery:${R} ${G}recover or carve files.${R}
+"
+printf "  ${GB}[5] System Information Report:${R} ${G}CPU, RAM, board, drives.${R}
+"
+printf "  ${GB}[6] Disk Health Check:${R} ${G}SMART flags failing disks.${R}
+"
+printf "  ${GB}[7] Disk Space Analyzer:${R} ${G}ncdu disk-usage view.${R}
+"
+printf "  ${GB}[8] Disk Tools:${R} ${G}wipe or edit partitions.${R}
+"
+printf "  ${GB}[9] Network Diagnostics:${R} ${G}interfaces, DNS, ping.${R}
+"
+printf "  ${GB}[10] Temperature & Sensors:${R} ${G}CPU/GPU/disk temps.${R}
+"
+printf "  ${GB}[11] Rootkit/Malware Scan:${R} ${G}integrity check.${R}
+"
+printf "  ${GB}[12] Export JSON Report:${R} ${G}all diagnostics to JSON.${R}
+"
+printf "  ${GB}[13] View Crash Logs:${R} ${G}list minidumps and EVTX.${R}
+"
+printf "  ${GB}[14] Disk Report:${R} ${G}dated tree, or export JSON/CSV.${R}
+"
+printf "  ${GB}[S] Shell:${R} ${G}root command line.${R}
+"
+printf "  ${GB}[A] About:${R} ${G}tool info, author, license.${R}
+"
+printf "
+  ${G}--------------------------------------------------${R}
+"
+printf "  ${GB}[V] Verbose:${R} ${G}Toggles extra detail in tool output.${R}
+"
+printf "  ${GB}[J] JSON:${R} ${G}Report tools print JSON instead of pretty.${R}
+"
+printf "
+  ${GB}Press ENTER to return to menu...${R}"; read x
+}
+
+clear
+printf "\n\n  ${GB}Scanning disks for Windows...${R}\n"
+/usr/local/bin/recoveryos-detect 2>/dev/null
+
+while true; do
+	show_menu; read CHOICE
+	case "$CHOICE" in
+		1) /usr/local/bin/recoveryos-resetpw ;;
+		2) run_report wifi ;;
+		3) /usr/local/bin/recoveryos-rescue ;;
+		4) /usr/local/bin/recoveryos-recover ;;
+		5) run_report sysinfo ;;
+		6) run_report diskhealth ;;
+		7) /usr/local/bin/recoveryos-diskspace ;;
+		8) /usr/local/bin/recoveryos-disktools ;;
+		9) run_report netdiag ;;
+		10) run_report sensors ;;
+		11) /usr/local/bin/recoveryos-antivirus ;;
+		12) /usr/local/bin/recoveryos-export ;;
+		13) run_report crashlogs ;;
+14) /usr/local/bin/recoveryos-diskreport ;;
+		s|S) drop_shell ;;
+a|A) /usr/local/bin/recoveryos-about ;;
+		v|V)
+			if [ "$(get_verbose)" = "1" ]; then echo 0 > "$STATE/verbose"; else echo 1 > "$STATE/verbose"; fi
+			;;
+		j|J)
+			if [ "$(get_json)" = "1" ]; then echo 0 > "$STATE/json"; else echo 1 > "$STATE/json"; fi
+			;;
+		h|H) show_help ;;
+		q|Q) clear; printf "${P}${GB}Shutting down...${R}\n"; sleep 1; poweroff ;;
+		*) ;;
+	esac
+done

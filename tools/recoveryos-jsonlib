@@ -1,0 +1,99 @@
+#!/bin/sh
+# RecoveryOS JSON collectors. Source: . /usr/local/bin/recoveryos-jsonlib
+# Each json_* prints ONE JSON object to stdout.
+. /usr/local/bin/recoveryos-mountlib
+STATE=/run/recoveryos
+
+json_esc() {
+	printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r\n\t'
+}
+
+json_windows() {
+	WIN_FOUND=0; WIN_PART=""; WIN_VER=""; WIN_FSTYPE=""; WIN_LABEL=""
+	[ -f "$STATE/win.conf" ] && . "$STATE/win.conf" 2>/dev/null
+	if [ "$WIN_FOUND" = "1" ]; then F=true; else F=false; fi
+	printf '{"found":%s,"partition":"%s","version":"%s","fstype":"%s","label":"%s"}' \
+		"$F" "$(json_esc "$WIN_PART")" "$(json_esc "$WIN_VER")" "$(json_esc "$WIN_FSTYPE")" "$(json_esc "$WIN_LABEL")"
+}
+
+json_system() {
+	CPUMODEL=$(lscpu 2>/dev/null | awk -F: '/Model name/{gsub(/^ +/,"",$2);print $2;exit}')
+	CPUS=$(lscpu 2>/dev/null | awk -F: '/^CPU\(s\)/{gsub(/ /,"",$2);print $2;exit}')
+	MEMT=$(free -h 2>/dev/null | awk '/^Mem:/{print $2}')
+	MEMU=$(free -h 2>/dev/null | awk '/^Mem:/{print $3}')
+	BVEN=$(dmidecode -s bios-vendor 2>/dev/null | head -1)
+	BVER=$(dmidecode -s bios-version 2>/dev/null | head -1)
+	printf '{"cpu_model":"%s","cpus":"%s","mem_total":"%s","mem_used":"%s","bios_vendor":"%s","bios_version":"%s"}' \
+		"$(json_esc "$CPUMODEL")" "$(json_esc "$CPUS")" "$(json_esc "$MEMT")" "$(json_esc "$MEMU")" "$(json_esc "$BVEN")" "$(json_esc "$BVER")"
+}
+
+json_disks() {
+	out=""
+	lsblk -d -p -n -o NAME,SIZE,TYPE 2>/dev/null | awk '$3=="disk"{print $1"|"$2}' > /tmp/.jdisks
+	while IFS='|' read dev size; do
+		H=$(smartctl -H "$dev" 2>/dev/null | awk -F: '/overall-health/{gsub(/^ +/,"",$2);print $2;exit}')
+		[ -z "$H" ] && H="unknown"
+		obj=$(printf '{"name":"%s","size":"%s","health":"%s"}' "$(json_esc "$dev")" "$(json_esc "$size")" "$(json_esc "$H")")
+		if [ -z "$out" ]; then out="$obj"; else out="$out,$obj"; fi
+	done < /tmp/.jdisks
+	rm -f /tmp/.jdisks
+	printf '[%s]' "$out"
+}
+
+json_sensors() {
+	out=""
+	for z in /sys/class/thermal/thermal_zone*/temp; do
+		[ -f "$z" ] || continue
+		t=$(cat "$z" 2>/dev/null); c=$((t/1000))
+		zn=$(basename "$(dirname "$z")")
+		obj=$(printf '{"zone":"%s","temp_c":%s}' "$(json_esc "$zn")" "$c")
+		if [ -z "$out" ]; then out="$obj"; else out="$out,$obj"; fi
+	done
+	printf '{"thermal_zones":[%s]}' "$out"
+}
+
+json_network() {
+	ifout=""
+	for i in $(ls /sys/class/net 2>/dev/null); do
+		[ "$i" = "lo" ] && continue
+		st=$(cat /sys/class/net/"$i"/operstate 2>/dev/null)
+		ip4=$(ip -4 -o addr show "$i" 2>/dev/null | awk '{print $4}' | head -1)
+		obj=$(printf '{"iface":"%s","state":"%s","ipv4":"%s"}' "$(json_esc "$i")" "$(json_esc "$st")" "$(json_esc "$ip4")")
+		if [ -z "$ifout" ]; then ifout="$obj"; else ifout="$ifout,$obj"; fi
+	done
+	GW=$(ip route 2>/dev/null | awk '/default/{print $3;exit}')
+	printf '{"interfaces":[%s],"gateway":"%s"}' "$ifout" "$(json_esc "$GW")"
+}
+
+json_wifi() {
+	WIN_FOUND=0; WIN_PART=""
+	[ -f "$STATE/win.conf" ] && . "$STATE/win.conf" 2>/dev/null
+	[ "$WIN_FOUND" != "1" ] || [ -z "$WIN_PART" ] && { printf '{"windows":false,"profiles":[]}'; return; }
+	MW=/mnt/win-json; mkdir -p "$MW"; umount "$MW" 2>/dev/null
+	if ! ros_mount_ro "$WIN_PART" "$MW"; then printf '{"windows":true,"mounted":false,"profiles":[]}'; return; fi
+	out=""
+	find "$MW" -ipath '*/ProgramData/Microsoft/Wlansvc/Profiles/Interfaces/*' -name '*.xml' 2>/dev/null > /tmp/.jwifi
+	while read xml; do
+		s=$(sed -n 's|.*<name>\([^<]*\)</name>.*|\1|p' "$xml" | head -1)
+		k=$(sed -n 's|.*<keyMaterial>\([^<]*\)</keyMaterial>.*|\1|p' "$xml" | head -1)
+		p=$(sed -n 's|.*<protected>\([^<]*\)</protected>.*|\1|p' "$xml" | head -1)
+		if [ -z "$k" ]; then ks="none"; kv=""; elif [ "$p" = "false" ]; then ks="cleartext"; kv="$k"; else ks="dpapi"; kv=""; fi
+		obj=$(printf '{"ssid":"%s","key_state":"%s","key":"%s"}' "$(json_esc "$s")" "$ks" "$(json_esc "$kv")")
+		if [ -z "$out" ]; then out="$obj"; else out="$out,$obj"; fi
+	done < /tmp/.jwifi
+	rm -f /tmp/.jwifi; umount "$MW" 2>/dev/null
+	printf '{"windows":true,"profiles":[%s]}' "$out"
+}
+
+json_crashlogs() {
+	WIN_FOUND=0; WIN_PART=""
+	[ -f "$STATE/win.conf" ] && . "$STATE/win.conf" 2>/dev/null
+	[ "$WIN_FOUND" != "1" ] || [ -z "$WIN_PART" ] && { printf '{"windows":false}'; return; }
+	MW=/mnt/win-json; mkdir -p "$MW"; umount "$MW" 2>/dev/null
+	if ! ros_mount_ro "$WIN_PART" "$MW"; then printf '{"windows":true,"mounted":false}'; return; fi
+	md=$(find "$MW" -ipath '*/Windows/Minidump/*.dmp' 2>/dev/null | wc -l | tr -d ' ')
+	big=$(find "$MW" -ipath '*/Windows/MEMORY.DMP' 2>/dev/null | head -1)
+	if [ -n "$big" ]; then bigb=true; else bigb=false; fi
+	umount "$MW" 2>/dev/null
+	printf '{"windows":true,"minidumps":%s,"memory_dump":%s}' "$md" "$bigb"
+}

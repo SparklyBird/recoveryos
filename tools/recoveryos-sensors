@@ -1,0 +1,38 @@
+#!/bin/sh
+G='\033[0;32m'; GB='\033[1;32m'; RD='\033[1;31m'; YL='\033[1;33m'; R='\033[0m'
+pause() { printf "\n  ${GB}Press ENTER to return to menu...${R}"; read x; }
+clear
+printf "\n  ${GB}=== Temperature & Sensors ===${R}\n\n"
+printf "  ${G}Detecting sensors...${R}\n\n"
+sensors-detect --auto >/dev/null 2>&1
+SENSOR_OUT=$(sensors 2>/dev/null)
+if [ -z "$SENSOR_OUT" ]; then
+	printf "  ${YL}No sensors detected via lm-sensors.${R}\n"
+	printf "  ${G}Trying kernel thermal zones...${R}\n\n"
+	FOUND=0
+	for z in /sys/class/thermal/thermal_zone*/temp; do
+		[ -f "$z" ] || continue
+		TYPE=$(cat "$(dirname $z)/type" 2>/dev/null)
+		TEMP=$(cat "$z" 2>/dev/null)
+		[ -z "$TEMP" ] && continue
+		TC=$((TEMP / 1000))
+		printf "  ${GB}$TYPE:${R} ${G}${TC} C${R}\n"
+		FOUND=1
+	done
+	[ "$FOUND" -eq 0 ] && printf "  ${YL}No thermal data available (virtual machine?).${R}\n"
+else
+	echo "$SENSOR_OUT" | while read line; do
+		case "$line" in
+			*"+"*"C"*|*"RPM"*) printf "    ${G}%s${R}\n" "$line" ;;
+			"") printf "\n" ;;
+			*":"*) printf "  ${GB}%s${R}\n" "$line" ;;
+			*) printf "    ${G}%s${R}\n" "$line" ;;
+		esac
+	done
+fi
+printf "\n  ${GB}--- Disk Temperatures (SMART) ---${R}\n"
+for d in $(lsblk -d -n -o NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
+	T=$(smartctl -A "/dev/$d" 2>/dev/null | awk '/Temperature_Celsius|Airflow_Temperature_Cel/{print $10;exit}')
+	[ -n "$T" ] && printf "  ${GB}/dev/$d:${R} ${G}${T} C${R}\n"
+done
+pause

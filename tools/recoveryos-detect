@@ -1,0 +1,60 @@
+#!/bin/sh
+# RecoveryOS boot-time Windows detection. Writes /run/recoveryos/win.conf once.
+. /usr/local/bin/recoveryos-mountlib
+STATE=/run/recoveryos
+CONF="$STATE/win.conf"
+MNT=/mnt/win-detect
+mkdir -p "$STATE" "$MNT"
+
+WIN_FOUND=0
+WIN_PART=""
+WIN_FSTYPE=""
+WIN_SAM=""
+WIN_VER=""
+WIN_LABEL=""
+WIN_LOCKED=""
+
+for p in $(blkid -o device 2>/dev/null); do
+	TYPE=$(blkid -o value -s TYPE "$p" 2>/dev/null)
+	LABEL=$(blkid -o value -s LABEL "$p" 2>/dev/null)
+	if echo "$TYPE" | grep -qi bitlocker; then
+		WIN_LOCKED="$WIN_LOCKED $p"
+		continue
+	fi
+	case "$TYPE" in
+		ntfs|NTFS)
+			if ros_mount_ro "$p" "$MNT"; then
+				SAM=$(find "$MNT" -maxdepth 4 -ipath '*/system32/config/sam' 2>/dev/null | head -1)
+				if [ -n "$SAM" ]; then
+					WIN_FOUND=1
+					WIN_PART="$p"
+					WIN_FSTYPE="$TYPE"
+					WIN_LABEL="$LABEL"
+					WIN_SAM=$(echo "$SAM" | sed "s|^$MNT/||")
+					SOFT=$(find "$MNT" -maxdepth 4 -ipath '*/system32/config/software' 2>/dev/null | head -1)
+					if [ -n "$SOFT" ]; then
+						V=$(printf 'cd Microsoft\\Windows NT\\CurrentVersion\ncat ProductName\nq\n' | chntpw -e "$SOFT" 2>/dev/null | grep -oiE 'Windows (11|10|8\.1|8|7|Vista|XP|Server [0-9]+)[A-Za-z ]*' | head -1)
+						[ -n "$V" ] && WIN_VER="$V"
+					fi
+					umount "$MNT" 2>/dev/null
+					break
+				fi
+				umount "$MNT" 2>/dev/null
+			else
+				WIN_LOCKED="$WIN_LOCKED $p"
+			fi
+			;;
+	esac
+done
+
+[ "$WIN_FOUND" = "1" ] && [ -z "$WIN_VER" ] && WIN_VER="Windows"
+
+{
+	echo "WIN_FOUND=$WIN_FOUND"
+	echo "WIN_PART=\"$WIN_PART\""
+	echo "WIN_FSTYPE=\"$WIN_FSTYPE\""
+	echo "WIN_SAM=\"$WIN_SAM\""
+	echo "WIN_VER=\"$WIN_VER\""
+	echo "WIN_LABEL=\"$WIN_LABEL\""
+	echo "WIN_LOCKED=\"$(echo $WIN_LOCKED | sed 's/^ *//')\""
+} > "$CONF"

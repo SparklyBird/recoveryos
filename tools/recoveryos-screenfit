@@ -1,0 +1,27 @@
+#!/bin/sh
+# Auto-fit console to the panel. Picks largest font giving >=34 rows, >=100 cols.
+# Runs setfont, writes /run/recoveryos/screen.conf (SCR_COLS) for the menu.
+STATE=/run/recoveryos; mkdir -p "$STATE" 2>/dev/null
+CONF="$STATE/screen.conf"
+FB=/sys/class/graphics/fb0/virtual_size
+COLS=80; ROWS=32; FONT=""
+if [ -r "$FB" ]; then
+	W=$(cut -d, -f1 "$FB" 2>/dev/null)
+	H=$(cut -d, -f2 "$FB" 2>/dev/null)
+	case "$W" in ''|*[!0-9]*) W=0 ;; esac
+	case "$H" in ''|*[!0-9]*) H=0 ;; esac
+	if [ "$W" -gt 0 ] && [ "$H" -gt 0 ]; then
+		for e in "32:16:ter-v32n" "28:14:ter-v28n" "24:12:ter-v24n" "20:10:ter-v20n" "16:8:ter-v16n"; do
+			fh=${e%%:*}; rest=${e#*:}; fw=${rest%%:*}; ff=${rest##*:}
+			r=$((H/fh)); c=$((W/fw))
+			if [ "$r" -ge 34 ] && [ "$c" -ge 100 ]; then FONT="$ff"; ROWS=$r; COLS=$c; break; fi
+		done
+		[ -z "$FONT" ] && { FONT="ter-v16n"; ROWS=$((H/16)); COLS=$((W/8)); }
+		setfont "/usr/share/consolefonts/$FONT.psf.gz" 2>/dev/null
+	fi
+fi
+{
+	echo "SCR_COLS=$COLS"
+	echo "SCR_ROWS=$ROWS"
+	echo "SCR_FONT=\"$FONT\""
+} > "$CONF"

@@ -1,0 +1,26 @@
+#!/bin/sh
+G='\033[0;32m'; GB='\033[1;32m'; R='\033[0m'
+render() {
+	printf "\n  ${GB}=== System Information Report ===${R}\n\n"
+	printf "  ${GB}--- CPU ---${R}\n${G}"
+	lscpu 2>/dev/null | grep -i "model name\|^cpu(s)\|thread\|socket\|mhz" | grep -vi flags | sed 's/^/  /'
+	printf "${R}\n  ${GB}--- Memory ---${R}\n${G}"
+	free -h 2>/dev/null | sed 's/^/  /'
+	printf "${R}\n  ${GB}--- Motherboard / BIOS ---${R}\n${G}"
+	dmidecode -t baseboard 2>/dev/null | grep -i "manufacturer\|product name\|version" | grep -v '^#' | sed 's/^/  /'
+	dmidecode -t bios 2>/dev/null | grep -i "vendor\|version\|release" | grep -v '^#' | sed 's/^/  /'
+	printf "${R}\n  ${GB}--- Storage ---${R}\n${G}"
+	lsblk -d -o NAME,SIZE,MODEL,TYPE 2>/dev/null | sed 's/^/  /'
+	printf "${R}\n  ${GB}--- Network ---${R}\n${G}"
+	for n in $(ls /sys/class/net 2>/dev/null); do
+		printf "    %-8s %s\n" "$n" "$(cat /sys/class/net/"$n"/operstate 2>/dev/null)"
+	done
+	printf "${R}\n"
+}
+clear
+if command -v less >/dev/null 2>&1; then
+	render | less -R -P "System Info  (Up/Down scroll, q returns to menu)"
+else
+	render
+	printf "  ${GB}Press ENTER to return to menu...${R}"; read x
+fi

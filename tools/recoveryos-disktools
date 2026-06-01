@@ -1,0 +1,90 @@
+#!/bin/sh
+G='\033[0;32m'; GB='\033[1;32m'; RD='\033[1;31m'; YL='\033[1;33m'; R='\033[0m'
+pause() { printf "\n  ${GB}Press ENTER to continue...${R}"; read x; }
+
+list_disks() {
+	i=1
+	lsblk -d -n -o NAME,SIZE,MODEL,TYPE,ROTA 2>/dev/null | awk '$4=="disk"' > /tmp/disks.txt
+	while read line; do
+		ROTA=$(echo "$line" | awk '{print $NF}')
+		if [ "$ROTA" = "0" ]; then KIND="SSD"; else KIND="HDD"; fi
+		printf "  ${G}%2d) /dev/%-8s${R}  ${G}%s${R}\n" "$i" "$(echo $line | awk '{print $1"  "$2"  "$3}')" "[$KIND]"
+		i=$((i+1))
+	done < /tmp/disks.txt
+}
+
+pick_disk() {
+	clear
+	printf "\n  ${GB}=== $1 ===${R}\n\n"
+	printf "  ${GB}Available disks:${R}\n\n"
+	list_disks
+	printf "\n  ${GB}Pick disk number (or Q to cancel):${R} "; read NUM
+	[ "$NUM" = "q" ] || [ "$NUM" = "Q" ] && return 1
+	LINE=$(sed -n "${NUM}p" /tmp/disks.txt)
+	[ -z "$LINE" ] && { printf "  ${RD}Invalid choice.${R}\n"; pause; return 1; }
+	PICKED="/dev/$(echo $LINE | awk '{print $1}')"
+	SIZE=$(echo $LINE | awk '{print $2}')
+	MODEL=$(echo $LINE | awk '{print $3}')
+	ROTA=$(echo $LINE | awk '{print $NF}')
+	[ "$ROTA" = "0" ] && KIND="SSD" || KIND="HDD"
+	return 0
+}
+
+do_wipe() {
+	pick_disk "Wipe Disk" || return
+	printf "\n  ${RD}**** DESTRUCTIVE ACTION ****${R}\n"
+	printf "  ${YL}Target: ${GB}$PICKED${R}  ${YL}Size: $SIZE  Model: $MODEL  Type: $KIND${R}\n\n"
+	printf "  ${G}Pick method:${R}\n"
+	printf "    ${G}1) Quick zero (1 pass, fastest)${R}\n"
+	printf "    ${G}2) Random data (3 passes, slow but secure)${R}\n"
+	if [ "$KIND" = "SSD" ]; then
+		printf "    ${G}3) blkdiscard (SSD secure erase, instant)${R}\n"
+	fi
+	printf "  ${GB}Method:${R} "; read M
+	case "$M" in
+		1) CMD="dd if=/dev/zero of=$PICKED bs=1M status=progress"; DESC="quick zero" ;;
+		2) CMD="shred -n 3 -v $PICKED"; DESC="3-pass random" ;;
+		3) [ "$KIND" = "SSD" ] && { CMD="blkdiscard -f $PICKED"; DESC="SSD discard"; } || { printf "  ${RD}Invalid for HDD.${R}\n"; pause; return; } ;;
+		*) printf "  ${G}Cancelled.${R}\n"; pause; return ;;
+	esac
+	printf "\n  ${RD}Will run: $DESC on $PICKED${R}\n"
+	printf "  ${RD}ALL DATA WILL BE PERMANENTLY DESTROYED.${R}\n"
+	printf "  ${YL}Type ${GB}WIPE${R} ${YL}in caps to proceed:${R} "; read CONFIRM
+	[ "$CONFIRM" != "WIPE" ] && { printf "\n  ${G}Cancelled. No changes made.${R}\n"; pause; return; }
+	clear
+	printf "\n  ${YL}Wiping $PICKED...${R}\n\n"
+	eval "$CMD"
+	sync
+	printf "\n  ${GB}Wipe complete.${R}\n"
+	pause
+}
+
+do_partition() {
+	pick_disk "Partition Disk" || return
+	printf "\n  ${YL}Will launch cfdisk on ${GB}$PICKED${R}\n"
+	printf "  ${G}cfdisk is interactive:${R}\n"
+	printf "  ${G}- Arrow keys to navigate${R}\n"
+	printf "  ${G}- [New] [Delete] [Type] [Write] to modify${R}\n"
+	printf "  ${G}- [Quit] to exit without saving${R}\n"
+	printf "  ${G}- [Write] commits changes to disk${R}\n\n"
+	pause
+	cfdisk "$PICKED"
+	sync
+	printf "\n  ${GB}cfdisk exited. Changes synced.${R}\n"
+	pause
+}
+
+while true; do
+	clear
+	printf "\n  ${GB}=== Disk Tools ===${R}\n\n"
+	printf "  ${GB}[1]${R} ${G}Wipe disk (zero/shred/discard)${R}\n"
+	printf "  ${GB}[2]${R} ${G}Partition disk (cfdisk)${R}\n"
+	printf "  ${GB}[Q]${R} ${G}Return to main menu${R}\n\n"
+	printf "  ${GB}Choice:${R} "; read C
+	case "$C" in
+		1) do_wipe ;;
+		2) do_partition ;;
+		q|Q) return 0 ;;
+		*) ;;
+	esac
+done

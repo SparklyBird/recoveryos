@@ -1,0 +1,55 @@
+#!/bin/sh
+# RecoveryOS shared mount helper. Source: . /usr/local/bin/recoveryos-mountlib
+# Mount errors are captured in ROS_MOUNT_ERR; ros_verr prints them only in verbose.
+ROS_MOUNT_ERR=""
+# ros_verr LABEL -> prints the last mount error, indented in red, only when VERBOSE=1
+ros_verr() {
+        [ "${VERBOSE:-0}" = "1" ] || return 0
+        [ -n "$ROS_MOUNT_ERR" ] || return 0
+        printf "  ${RD}%s${R}\n" "${1:-mount error:}"
+        printf '%s\n' "$ROS_MOUNT_ERR" | sed "s/^/    /"
+}
+# ros_mount_ro DEVICE MOUNTPOINT -> 0 ok, 1 fail. Never writes to source.
+ros_mount_ro() {
+        _dev="$1"; _mp="$2"; ROS_MOUNT_ERR=""
+        mkdir -p "$_mp" 2>/dev/null
+        umount "$_mp" 2>/dev/null
+        _fst=$(blkid -o value -s TYPE "$_dev" 2>/dev/null)
+        case "$_fst" in
+                ntfs|NTFS)
+                        ROS_MOUNT_ERR=$(mount -t ntfs-3g -o ro "$_dev" "$_mp" 2>&1) && return 0
+                        ROS_MOUNT_ERR=$(mount -t ntfs-3g -o ro,force "$_dev" "$_mp" 2>&1) && return 0
+                        return 1
+                        ;;
+                "") ROS_MOUNT_ERR="no filesystem detected on $_dev (blkid found no TYPE)"; return 1 ;;
+                *) ROS_MOUNT_ERR=$(mount -o ro "$_dev" "$_mp" 2>&1) && return 0; return 1 ;;
+        esac
+}
+# ros_has_hiberfile MOUNTPOINT -> 0 if hiberfil.sys present (must be mounted first)
+ros_has_hiberfile() {
+        [ -n "$(find "$1" -maxdepth 2 -iname 'hiberfil.sys' 2>/dev/null | head -1)" ]
+}
+# ros_mount_rw DEVICE MOUNTPOINT -> 0 ok, 1 fail. For [1] write. Tries force.
+ros_mount_rw() {
+        _dev="$1"; _mp="$2"; ROS_MOUNT_ERR=""
+        mkdir -p "$_mp" 2>/dev/null
+        umount "$_mp" 2>/dev/null
+        _fst=$(blkid -o value -s TYPE "$_dev" 2>/dev/null)
+        case "$_fst" in
+                ntfs|NTFS)
+                        ROS_MOUNT_ERR=$(mount -t ntfs-3g -o rw "$_dev" "$_mp" 2>&1) && return 0
+                        ROS_MOUNT_ERR=$(mount -t ntfs-3g -o rw,force "$_dev" "$_mp" 2>&1) && return 0
+                        return 1
+                        ;;
+                "") ROS_MOUNT_ERR="no filesystem detected on $_dev (blkid found no TYPE)"; return 1 ;;
+                *) ROS_MOUNT_ERR=$(mount -o rw "$_dev" "$_mp" 2>&1) && return 0; return 1 ;;
+        esac
+}
+# ros_mount_rw_clear DEVICE MOUNTPOINT -> rw + wipe hiberfile. Use after warn+confirm.
+ros_mount_rw_clear() {
+        _dev="$1"; _mp="$2"; ROS_MOUNT_ERR=""
+        mkdir -p "$_mp" 2>/dev/null
+        umount "$_mp" 2>/dev/null
+        ROS_MOUNT_ERR=$(mount -t ntfs-3g -o rw,remove_hiberfile "$_dev" "$_mp" 2>&1) && return 0
+        return 1
+}

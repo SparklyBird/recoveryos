@@ -1,0 +1,31 @@
+#!/bin/sh
+G='\033[0;32m'; GB='\033[1;32m'; RD='\033[1;31m'; YL='\033[1;33m'; R='\033[0m'
+pause() { printf "\n  ${GB}Press ENTER to return to menu...${R}"; read x; }
+clear
+printf "\n  ${GB}=== System Integrity Check ===${R}\n\n"
+printf "  ${YL}Checks the LIVE recovery environment (read-only, fresh${R}\n"
+printf "  ${YL}each boot - low risk). This is not a Windows AV scan.${R}\n"
+printf "  ${G}For the Windows disk, use Windows Defender or${R}\n"
+printf "  ${G}Malwarebytes after Windows boots.${R}\n\n"
+printf "  ${GB}Run check? [y/N]:${R} "; read CONFIRM
+case "$CONFIRM" in
+	y|Y|yes|YES) ;;
+	*) printf "\n  ${G}Cancelled.${R}\n"; pause; exit 0 ;;
+esac
+clear
+printf "\n  ${GB}=== System Integrity Check ===${R}\n\n"
+printf "  ${GB}[1] Privileged (SUID/SGID) binaries:${R}\n${G}"
+SUID=$(find /bin /sbin /usr/bin /usr/sbin /lib -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null)
+if [ -n "$SUID" ]; then printf '%s\n' "$SUID" | sed 's/^/    /'; else printf "    none\n"; fi
+printf "${R}\n  ${GB}[2] Loaded kernel modules:${R}\n${G}"
+printf "    %s modules loaded\n" "$(lsmod 2>/dev/null | grep -vc '^Module')"
+printf "${R}\n  ${GB}[3] Hidden files in /tmp /run /dev:${R}\n${G}"
+HID=$(find /tmp /run /dev -maxdepth 2 -name '.*' -type f 2>/dev/null)
+if [ -n "$HID" ]; then printf '%s\n' "$HID" | sed 's/^/    /'; else printf "    none\n"; fi
+printf "${R}\n  ${GB}[4] World-writable files in system dirs:${R}\n${G}"
+WW=$(find /bin /sbin /usr/bin /usr/sbin -perm -0002 -type f 2>/dev/null)
+if [ -n "$WW" ]; then printf '%s\n' "$WW" | sed 's/^/    /'; else printf "    none\n"; fi
+printf "${R}\n  ${GB}Check complete.${R}\n"
+printf "  ${G}SUID list is normal (su, mount, etc). Investigate only${R}\n"
+printf "  ${G}unexpected entries, hidden binaries, or writable system files.${R}\n"
+pause

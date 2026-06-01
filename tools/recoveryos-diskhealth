@@ -1,0 +1,23 @@
+#!/bin/sh
+G='\033[0;32m'; GB='\033[1;32m'; RD='\033[1;31m'; R='\033[0m'
+STATE=/run/recoveryos
+VERBOSE=0; [ -f "$STATE/verbose" ] && VERBOSE=$(cat "$STATE/verbose" 2>/dev/null)
+clear
+printf "\n  ${GB}=== Disk Health Check (SMART) ===${R}\n\n"
+for d in $(lsblk -d -n -o NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
+        DEV="/dev/$d"
+        MODEL=$(lsblk -d -n -o MODEL "$DEV" 2>/dev/null)
+        SIZE=$(lsblk -d -n -o SIZE "$DEV" 2>/dev/null)
+        printf "  ${GB}Drive: $DEV${R}  ${G}($MODEL  $SIZE)${R}\n"
+        HOUT=$(smartctl -H "$DEV" 2>&1)
+        HEALTH=$(printf '%s\n' "$HOUT" | grep -i "overall-health\|SMART Health")
+        if [ -n "$HEALTH" ]; then printf "  ${G}%s${R}\n" "$HEALTH"
+        else
+                printf "  ${G}SMART not available (virtual/unsupported).${R}\n"
+                [ "$VERBOSE" = "1" ] && printf '%s\n' "$HOUT" | sed 's/^/    /'
+        fi
+        smartctl -A "$DEV" 2>/dev/null | grep -i "reallocated\|pending\|uncorrect\|temperature_celsius\|power_on_hours\|wear" | sed 's/^/    /'
+        printf "\n"
+done
+printf "  ${RD}Tip: Reallocated/Pending sectors above 0 = failing drive.${R}\n"
+printf "\n  ${GB}Press ENTER to return to menu...${R}"; read x

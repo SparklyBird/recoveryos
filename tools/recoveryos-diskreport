@@ -1,0 +1,125 @@
+#!/bin/sh
+. /usr/local/bin/recoveryos-mountlib
+G='\033[0;32m'; GB='\033[1;32m'; RD='\033[1;31m'; YL='\033[1;33m'; R='\033[0m'
+SRC=/mnt/analyze; OUT=/mnt/report-out
+mkdir -p "$SRC" "$OUT" 2>/dev/null
+STATE=/run/recoveryos
+VERBOSE=0; [ -f "$STATE/verbose" ] && VERBOSE=$(cat "$STATE/verbose" 2>/dev/null)
+SRC_DEV=""; OUT_DEV=""
+pause() { printf "\n  ${GB}Press ENTER to continue...${R}"; read x; }
+
+GFIND=""
+for c in /usr/bin/find find gfind; do
+	if command -v "$c" >/dev/null 2>&1 && "$c" --version 2>/dev/null | grep -q GNU; then GFIND="$c"; break; fi
+done
+
+emit_rows() {
+	if [ -n "$GFIND" ]; then
+		"$GFIND" "$1" -printf '%y\t%s\t%TY-%Tm-%Td\t%AY-%Am-%Ad\t%BY-%Bm-%Bd\t%p\n' 2>/dev/null
+	else
+		find "$1" -print0 2>/dev/null | xargs -0 stat -c '%F|%s|%Y|%X|%n' 2>/dev/null \
+		| awk -F'|' 'function d(e){return (e==""||e=="-"||e=="0")?"-":strftime("%Y-%m-%d",e)}
+		{t=($1 ~ /[Dd]irectory/?"d":"f"); printf "%s\t%s\t%s\t%s\t%s\t%s\n", t,$2,d($3),d($4),"-",$NF}'
+	fi
+}
+
+list_parts() {
+	printf "${G}"
+	lsblk -o NAME,SIZE,FSTYPE,LABEL 2>/dev/null | grep -Ev 'loop|^NAME'
+	printf "${R}"
+}
+
+choose_src() {
+	SRC_DEV=""
+	printf "  ${GB}Available partitions:${R}\n"; list_parts
+	printf "\n  ${GB}Enter device to analyze (e.g. sdb1): ${R}"
+	read d
+	[ -z "$d" ] && return 1
+	d="/dev/$(echo "$d" | sed 's#^/dev/##')"
+	[ -b "$d" ] || { printf "  ${RD}Not a block device: $d${R}\n"; pause; return 1; }
+	SRC_DEV="$d"
+}
+
+choose_out() {
+	OUT_DEV=""
+	printf "\n  ${GB}Where to save? Available partitions:${R}\n"; list_parts
+	printf "\n  ${GB}Enter output device (e.g. sdc1): ${R}"
+	read d
+	[ -z "$d" ] && return 1
+	d="/dev/$(echo "$d" | sed 's#^/dev/##')"
+	[ -b "$d" ] || { printf "  ${RD}Not a block device: $d${R}\n"; pause; return 1; }
+	[ "$d" = "$SRC_DEV" ] && { printf "  ${RD}Output must differ from the analyzed disk.${R}\n"; pause; return 1; }
+	if ! ros_mount_rw "$d" "$OUT"; then
+		printf "  ${RD}Could not mount $d read-write.${R}\n"; ros_verr "$d"; pause; return 1
+	fi
+	OUT_DEV="$d"
+}
+
+browse_tree() {
+	emit_rows "$SRC" \
+	| awk -F'\t' -v root="$SRC" '
+	function human(b){s="BKMGT";i=1;while(b>=1024&&i<5){b/=1024;i++}return sprintf("%7.1f%s",b,substr(s,i,1))}
+	{
+		p=$6
+		rel=substr(p,length(root)+1)
+		d=gsub(/\//,"/",rel)
+		n=p; sub(/.*\//,"",n)
+		ind=""; for(i=0;i<d;i++) ind=ind"  "
+		mark=($1=="d"?"/":"")
+		printf "%9s  %s  %s%s%s\n", human($2), $3, ind, n, mark
+	}' \
+	| less -S
+}
+
+export_json() {
+	choose_out || return
+	f="$OUT/recoveryos-tree-$(date +%Y%m%d-%H%M%S).json"
+	printf "\n  ${G}Scanning and writing JSON (large disks take a while)...${R}\n"
+	if ncdu -o "$f" "$SRC" >/dev/null 2>&1; then
+		sync
+		printf "  ${GB}Saved: $f${R}\n"
+		printf "  ${G}Reload with:  ncdu -f <file>   or any web ncdu viewer.${R}\n"
+	else
+		printf "  ${RD}JSON export failed.${R}\n"
+	fi
+	umount "$OUT" 2>/dev/null; pause
+}
+
+export_csv() {
+	choose_out || return
+	f="$OUT/recoveryos-tree-$(date +%Y%m%d-%H%M%S).csv"
+	printf "\n  ${G}Writing CSV...${R}\n"
+	printf 'type|size_bytes|modified|accessed|created|path\n' > "$f"
+	emit_rows "$SRC" | tr '\t' '|' >> "$f"
+	sync
+	printf "  ${GB}Saved: $f${R}\n"
+	printf "  ${G}Pipe-delimited. 'created' is - when birth-time is unavailable.${R}\n"
+	umount "$OUT" 2>/dev/null; pause
+}
+
+clear
+printf "\n  ${GB}=== Disk Report ===${R}\n\n"
+choose_src || { exit 0; }
+printf "\n  ${G}Mounting $SRC_DEV read-only...${R}\n"
+if ! ros_mount_ro "$SRC_DEV" "$SRC"; then
+	printf "  ${RD}Could not mount $SRC_DEV.${R}\n"; ros_verr "$SRC_DEV"; pause; exit 0
+fi
+
+while true; do
+	clear
+	printf "\n  ${GB}=== Disk Report: $SRC_DEV ===${R}\n\n"
+	printf "  ${GB}[1]${R} ${G}Browse tree on screen (size + dates)${R}\n"
+	printf "  ${GB}[2]${R} ${G}Export JSON (ncdu tree, size)${R}\n"
+	printf "  ${GB}[3]${R} ${G}Export CSV (size + dates)${R}\n"
+	printf "  ${GB}[Q]${R} ${G}Back to menu${R}\n\n"
+	printf "  ${GB}Choice: ${R}"
+	read c
+	case "$c" in
+		1) browse_tree ;;
+		2) export_json ;;
+		3) export_csv ;;
+		q|Q) break ;;
+		*) ;;
+	esac
+done
+umount "$SRC" 2>/dev/null

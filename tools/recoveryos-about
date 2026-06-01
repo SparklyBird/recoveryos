@@ -1,0 +1,38 @@
+#!/bin/sh
+G='\033[0;32m'; GB='\033[1;32m'; R='\033[0m'
+clear
+printf "${GB}"
+cat <<'TXT'
+
+  === About RecoveryOS ===
+
+  RecoveryOS is a bootable offline Windows recovery toolkit
+  built on Alpine Linux. Boot it from USB on a PC that won't
+  start, and work on the Windows install from outside it -
+  no login required.
+
+  It can reset a local Windows password, recover saved WiFi
+  keys, rescue or carve user files, check disk health (SMART)
+  and space, read system info and sensors, run network
+  diagnostics, and export a full machine report. All disk
+  reads are read-only by default, and BitLocker-encrypted
+  volumes are never bypassed.
+
+  --------------------------------------------------
+
+  Author:   N.G. (SparklyBird)
+  GitHub:   github.com/SparklyBird
+  Version:  3.23
+
+  License:  Free and open. Free for personal use; commercial
+            or corporate use requires the author's permission.
+            Share it unmodified, with this notice and credit kept.
+
+  No warranty. If you wipe your own drive, that's on you.
+  Use it only on systems and data you own or are allowed to
+  access. The author is not liable for any data loss, damage,
+  or other consequences of using it.
+
+TXT
+printf "${R}"
+printf "  ${GB}Press ENTER to return to menu...${R}"; read x

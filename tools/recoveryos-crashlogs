@@ -1,0 +1,59 @@
+#!/bin/sh
+. /usr/local/bin/recoveryos-mountlib
+G='\033[0;32m'; GB='\033[1;32m'; RD='\033[1;31m'; YL='\033[1;33m'; R='\033[0m'
+MNT=/mnt/win; mkdir -p "$MNT"
+STATE=/run/recoveryos
+VERBOSE=0; [ -f "$STATE/verbose" ] && VERBOSE=$(cat "$STATE/verbose" 2>/dev/null)
+pause() { printf "\n  ${GB}Press ENTER to continue...${R}"; read x; }
+clear
+printf "\n  ${GB}=== View Crash Logs ===${R}\n\n"
+
+WIN_FOUND=0; WIN_PART=""
+[ -f "$STATE/win.conf" ] && . "$STATE/win.conf" 2>/dev/null
+if [ "$WIN_FOUND" != "1" ] || [ -z "$WIN_PART" ]; then
+        printf "  ${RD}No Windows installation found.${R}\n"; pause; exit 0
+fi
+
+[ "$VERBOSE" = "1" ] && printf "  ${G}Mounting $WIN_PART read-only...${R}\n"
+if ! ros_mount_ro "$WIN_PART" "$MNT"; then
+        printf "  ${RD}Could not mount $WIN_PART.${R}\n"; ros_verr "ntfs-3g said:"; pause; exit 0
+fi
+printf "  ${GB}Found Windows on: $WIN_PART${R}\n\n"
+
+printf "  ${GB}--- Minidumps (BSOD) ---${R}\n"
+DUMPS=$(find "$MNT" -ipath '*/Windows/Minidump/*.dmp' 2>/dev/null | sort -r)
+if [ -z "$DUMPS" ]; then
+        printf "  ${G}No minidumps found.${R}\n"
+else
+        DCOUNT=$(echo "$DUMPS" | wc -l)
+        printf "  ${G}$DCOUNT minidump(s):${R}\n"
+        echo "$DUMPS" | head -8 | while read dmp; do
+                DATE=$(date -r "$dmp" '+%Y-%m-%d %H:%M' 2>/dev/null)
+                SIZE=$(ls -lh "$dmp" 2>/dev/null | awk '{print $5}')
+                NAME=$(basename "$dmp")
+                printf "    ${GB}$NAME${R}  ${G}$DATE  $SIZE${R}\n"
+        done
+        [ "$DCOUNT" -gt 8 ] && printf "    ${G}... and $((DCOUNT-8)) more${R}\n"
+fi
+printf "\n  ${GB}--- Full Memory Dump ---${R}\n"
+BIG=$(find "$MNT" -ipath '*/Windows/MEMORY.DMP' 2>/dev/null | head -1)
+if [ -n "$BIG" ]; then
+        SIZE=$(ls -lh "$BIG" 2>/dev/null | awk '{print $5}')
+        DATE=$(date -r "$BIG" '+%Y-%m-%d %H:%M' 2>/dev/null)
+        printf "  ${G}MEMORY.DMP  $SIZE  $DATE${R}\n"
+else
+        printf "  ${G}None.${R}\n"
+fi
+printf "\n  ${GB}--- Event Logs ---${R}\n"
+for evt in System Application Security; do
+        F=$(find "$MNT" -ipath "*/winevt/Logs/${evt}.evtx" 2>/dev/null | head -1)
+        [ -z "$F" ] && continue
+        SIZE=$(ls -lh "$F" 2>/dev/null | awk '{print $5}')
+        printf "  ${G}${evt}.evtx  $SIZE${R}\n"
+done
+printf "\n  ${G}--------------------------------------------------${R}\n"
+printf "  ${YL}Real BSOD analysis needs WinDbg.${R}\n"
+printf "  ${G}Use [2] Rescue Files to copy these out, then:${R}\n"
+printf "    ${G}- WinDbg / WhoCrashed for .dmp files${R}\n"
+printf "    ${G}- Event Viewer for .evtx files${R}\n"
+umount "$MNT" 2>/dev/null; pause

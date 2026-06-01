@@ -1,0 +1,79 @@
+#!/bin/sh
+G='\033[0;32m'; GB='\033[1;32m'; RD='\033[1;31m'; YL='\033[1;33m'; R='\033[0m'
+STATE=/run/recoveryos
+VERBOSE=0; [ -f "$STATE/verbose" ] && VERBOSE=$(cat "$STATE/verbose" 2>/dev/null)
+pause() { printf "\n  ${GB}Press ENTER to return to menu...${R}"; read x; }
+clear
+printf "\n  ${GB}=== Network Diagnostics ===${R}\n\n"
+
+if ! ip route 2>/dev/null | grep -q default; then
+        printf "  ${YL}No network yet - bringing interfaces up, trying DHCP...${R}\n"
+        for i in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+                ip link set "$i" up 2>/dev/null
+        done
+        w=0
+        while [ "$w" -lt 12 ]; do
+                got=0
+                for i in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+                        [ "$(cat /sys/class/net/"$i"/carrier 2>/dev/null)" = "1" ] && got=1
+                done
+                [ "$got" = "1" ] && break
+                sleep 1; w=$((w+1))
+        done
+        UDS=""
+        [ -x /usr/share/udhcpc/default.script ] && UDS="-s /usr/share/udhcpc/default.script"
+        for i in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+                [ "$(cat /sys/class/net/"$i"/carrier 2>/dev/null)" = "1" ] || continue
+                if command -v dhcpcd >/dev/null 2>&1; then
+                        if [ "$VERBOSE" = "1" ]; then
+                                printf "  ${G}dhcpcd $i:${R}\n"; dhcpcd -t 10 "$i" 2>&1 | sed 's/^/    /'
+                        else
+                                dhcpcd -t 10 "$i" >/dev/null 2>&1
+                        fi
+                elif command -v udhcpc >/dev/null 2>&1; then
+                        if [ "$VERBOSE" = "1" ]; then
+                                printf "  ${G}udhcpc $i:${R}\n"; udhcpc -i "$i" -t 5 -T 2 -n $UDS 2>&1 | sed 's/^/    /'
+                        else
+                                udhcpc -i "$i" -t 5 -T 2 -n -q $UDS >/dev/null 2>&1
+                        fi
+                fi
+        done
+        printf "\n"
+fi
+
+printf "  ${GB}--- Interfaces ---${R}\n${G}"
+FOUND=0
+for i in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+        FOUND=1
+        st=$(cat /sys/class/net/"$i"/operstate 2>/dev/null)
+        mac=$(cat /sys/class/net/"$i"/address 2>/dev/null)
+        printf "    %-8s state %-8s %s\n" "$i" "$st" "$mac"
+done
+[ "$FOUND" = "0" ] && printf "    ${RD}No interfaces found - NIC driver may be missing.${R}${G}\n"
+
+printf "${R}\n  ${GB}--- Addresses ---${R}\n${G}"
+for i in $(ls /sys/class/net 2>/dev/null | grep -v '^lo$'); do
+        ip addr show "$i" 2>/dev/null | awk -v n="$i" '/inet /{printf "    %-8s %s\n", n, $2}'
+done
+
+printf "${R}\n  ${GB}--- Default Route ---${R}\n${G}"
+DEF=$(ip route 2>/dev/null | grep default)
+if [ -n "$DEF" ]; then printf '%s\n' "$DEF" | sed 's/^/    /'; else printf "    ${RD}No default route${R}\n"; fi
+
+printf "${R}\n  ${GB}--- DNS Servers ---${R}\n${G}"
+DNS=$(grep ^nameserver /etc/resolv.conf 2>/dev/null)
+if [ -n "$DNS" ]; then printf '%s\n' "$DNS" | sed 's/^/    /'; else printf "    ${RD}No DNS configured${R}\n"; fi
+
+printf "${R}\n  ${GB}--- Connectivity Tests ---${R}\n"
+printf "  ${G}Pinging gateway... ${R}"
+GW=$(ip route 2>/dev/null | awk '/default/{print $3;exit}')
+if [ -n "$GW" ]; then
+        if ping -c 1 -W 2 "$GW" >/dev/null 2>&1; then printf "${GB}OK${R} ${G}($GW)${R}\n"; else printf "${RD}FAIL${R} ${G}($GW)${R}\n"; fi
+else
+        printf "${YL}skipped (no gateway)${R}\n"
+fi
+printf "  ${G}Pinging 8.8.8.8... ${R}"
+if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then printf "${GB}OK${R}\n"; else printf "${RD}FAIL${R}\n"; fi
+printf "  ${G}DNS lookup google.com... ${R}"
+if nslookup google.com >/dev/null 2>&1; then printf "${GB}OK${R}\n"; else printf "${RD}FAIL${R}\n"; fi
+pause

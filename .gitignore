@@ -1,0 +1,20 @@
+# Build artifacts
+*.iso
+*.iso.sha256
+
+# Editor / backup files
+*.bak
+*~
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+
+# Alpine chroot / build trees (never commit)
+chroot/
+iso/
+
+# OS cruft
+.DS_Store
+Thumbs.db

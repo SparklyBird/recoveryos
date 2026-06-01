@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+# recoveryos-wifidecrypt  <windows_mount_point>
+# Offline DPAPI decrypt of saved WiFi keys from a mounted Windows volume.
+# Prints TSV: SSID <TAB> AUTH <TAB> STATUS <TAB> KEY   (decrypted|cleartext|open|locked)
+# Source disk stays read-only; hives are COPIED to tmpfs because impacket opens
+# registry hives r+b, which EROFSes on a read-only mount.
+import sys, os, re, binascii, glob, logging, tempfile, shutil
+logging.disable(logging.CRITICAL)
+try:
+    from impacket.examples.secretsdump import LocalOperations, LSASecrets
+    from impacket.dpapi import MasterKeyFile, MasterKey, DPAPI_BLOB, bin_to_string
+except Exception as e:
+    sys.stderr.write("impacket import failed: %s\n" % e); sys.exit(2)
+GUID_RE = re.compile(r'^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$')
+def ci_resolve(base, *parts):
+    cur = base
+    for p in parts:
+        if not os.path.isdir(cur): return None
+        match = None
+        for entry in os.listdir(cur):
+            if entry.lower() == p.lower(): match = entry; break
+        if match is None: return None
+        cur = os.path.join(cur, match)
+    return cur if os.path.exists(cur) else None
+def get_dpapi_system(sys_hive, sec_hive):
+    store = {}
+    def cb(secretType, secret):
+        if isinstance(secret, bytes): secret = secret.decode('latin-1', 'ignore')
+        if 'dpapi_machinekey' not in secret: return
+        for line in secret.split('\n'):
+            line = line.strip()
+            if line.startswith('dpapi_machinekey:'):
+                v = line.split(':', 1)[1].strip()
+                store['MachineKey'] = binascii.unhexlify(v[2:] if v.startswith('0x') else v)
+            elif line.startswith('dpapi_userkey:'):
+                v = line.split(':', 1)[1].strip()
+                store['UserKey'] = binascii.unhexlify(v[2:] if v.startswith('0x') else v)
+    bootKey = LocalOperations(sys_hive).getBootKey()
+    lsa = LSASecrets(sec_hive, bootKey, None, isRemote=False, perSecretCallback=cb)
+    lsa.dumpSecrets()
+    try: lsa.finish()
+    except Exception: pass
+    return store
+def decrypt_masterkeys(protect_root, dpapi_system):
+    mks = {}
+    cand = []
+    for root, dirs, files in os.walk(protect_root):
+        for fn in files:
+            if GUID_RE.match(fn): cand.append(os.path.join(root, fn))
+    for path in cand:
+        try:
+            data = open(path, 'rb').read(); mkf = MasterKeyFile(data); rest = data[len(mkf):]
+            if mkf['MasterKeyLen'] == 0: continue
+            mk = MasterKey(rest[:mkf['MasterKeyLen']])
+            guid = mkf['Guid'].decode('utf-16le').rstrip('\x00').lower()
+            dk = None
+            for kname in ('UserKey', 'MachineKey'):
+                if kname in dpapi_system:
+                    try:
+                        r = mk.decrypt(dpapi_system[kname])
+                    except Exception: r = None
+                    if r: dk = r; break
+            if dk: mks[guid] = dk
+        except Exception: continue
+    return mks
+def parse_profile(path):
+    try: raw = open(path, 'r', encoding='utf-8', errors='ignore').read()
+    except Exception: return None
+    ssid = re.search(r'<name>([^<]*)</name>', raw); ssid = ssid.group(1) if ssid else os.path.basename(path)
+    auth = re.search(r'<authentication>([^<]*)</authentication>', raw); auth = auth.group(1) if auth else ''
+    prot = re.search(r'<protected>([^<]*)</protected>', raw); prot = (prot.group(1) if prot else '').lower()
+    km = re.search(r'<keyMaterial>([^<]*)</keyMaterial>', raw); km = km.group(1).strip() if km else ''
+    return ssid, auth, prot, km
+def decode_clear(b):
+    if not b: return ''
+    b = b.rstrip(b'\x00')
+    for enc in ('utf-8', 'utf-16-le', 'latin-1'):
+        try:
+            s = b.decode(enc)
+            if all((31 < ord(c) < 127) or c == '\t' for c in s): return s
+        except Exception: pass
+    return b.decode('latin-1', 'replace')
+def load_dpapi(sys_hive, sec_hive, protect):
+    tmpd = tempfile.mkdtemp(prefix='ros-hives-')
+    try:
+        sysc = os.path.join(tmpd, 'SYSTEM'); secc = os.path.join(tmpd, 'SECURITY')
+        shutil.copyfile(sys_hive, sysc); shutil.copyfile(sec_hive, secc)
+        return decrypt_masterkeys(protect, get_dpapi_system(sysc, secc))
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+def main():
+    if len(sys.argv) < 2:
+        sys.stderr.write("usage: recoveryos-wifidecrypt <mount>\n"); sys.exit(2)
+    mnt = sys.argv[1]
+    sys_hive = ci_resolve(mnt, 'Windows', 'System32', 'config', 'SYSTEM')
+    sec_hive = ci_resolve(mnt, 'Windows', 'System32', 'config', 'SECURITY')
+    protect = ci_resolve(mnt, 'Windows', 'System32', 'Microsoft', 'Protect', 'S-1-5-18')
+    wlan = ci_resolve(mnt, 'ProgramData', 'Microsoft', 'Wlansvc', 'Profiles', 'Interfaces')
+    profiles = glob.glob(os.path.join(wlan, '*', '*.xml')) if wlan else []
+    if not profiles: sys.exit(0)
+    mks = {}
+    if sys_hive and sec_hive and protect:
+        try: mks = load_dpapi(sys_hive, sec_hive, protect)
+        except Exception as e:
+            sys.stderr.write("dpapi setup failed: %s\n" % e); mks = {}
+    for path in sorted(profiles):
+        parsed = parse_profile(path)
+        if not parsed: continue
+        ssid, auth, prot, km = parsed
+        status, key = 'locked', ''
+        if not km: status, key = 'open', ''
+        elif prot == 'false': status, key = 'cleartext', km
+        else:
+            try:
+                blob = DPAPI_BLOB(binascii.unhexlify(km))
+                guid = bin_to_string(blob['GuidMasterKey']).lower()
+                dk = mks.get(guid)
+                if dk:
+                    clear = blob.decrypt(dk)
+                    if clear: status, key = 'decrypted', decode_clear(clear)
+            except Exception: pass
+        sys.stdout.write('%s\t%s\t%s\t%s\n' % (ssid, auth, status, key))
+if __name__ == '__main__':
+    main()
