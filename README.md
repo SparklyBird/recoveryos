@@ -4,7 +4,7 @@
 
 Boot it from a USB stick on a PC that won't start and work on the Windows install from the outside — no login required. RecoveryOS auto-launches a green-on-black text menu offering password reset, WiFi key recovery, file rescue, disk health and space analysis, system reporting, and more. All disk reads are read-only by default, and BitLocker-encrypted volumes are never bypassed.
 
-![RecoveryOS menu](docs/img/menu.png)
+<img width="1895" height="1135" alt="menu" src="https://github.com/user-attachments/assets/ff6edb88-e97a-4b76-a358-9dc9048850ab" />
 
 ## What it does
 
