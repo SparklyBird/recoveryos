@@ -32,6 +32,20 @@ A single hybrid ISO (BIOS + UEFI) that runs entirely from RAM. On boot it auto-f
 
 Two global toggles — **[V] Verbose** and **[J] JSON** — apply across the reporting tools.
 
+## Quick start
+
+1. **Download** `recoveryos-v3.23-x86_64.iso` and `…iso.sha256` from the [latest Release](../../releases/latest).
+2. **Verify** the download matches the checksum (do not skip — you're trusting it with disks and passwords):
+   - **Windows:** `certutil -hash file recoveryos-v3.23-x86_64.iso SHA256` and compare to the `.sha256` contents.
+   - **Linux / macOS:** `sha256sum -c recoveryos-v3.23-x86_64.iso.sha256` → expect `OK`.
+3. **Flash to a USB stick:**
+   - **Windows:** [Rufus](https://rufus.ie) → select the ISO → when prompted, choose **DD Image mode** (ISO mode will *not* boot).
+   - **Linux:** `sudo dd if=recoveryos-v3.23-x86_64.iso of=/dev/sdX bs=4M status=progress oflag=sync` — triple-check `/dev/sdX` is the USB, not a real disk.
+4. **Boot the target PC** from the USB (tap the boot-menu key at power-on — usually F12, F8, F9, or Esc; Macs are not supported).
+5. The menu **auto-launches**. Pick a tool by number. Everything is read-only by default; press **[H]** for per-tool help.
+
+> Runs entirely from RAM — once booted you can remove nothing is installed to the target. Use only on systems and data you own or are authorized to access.
+
 ## How it's built
 
 - **Base:** Alpine Linux 3.23, diskless mode, ~470 MB hybrid ISO.
@@ -67,7 +81,7 @@ Flash the ISO with Rufus in **DD Image mode** (mandatory for Alpine hybrid ISOs)
 
 ## Downloads
 
-Prebuilt ISO is attached to the latest Release. Verify the checksum before flashing.
+The prebuilt ISO and its `.sha256` are attached to the [latest Release](../../releases/latest). Always verify the checksum before flashing (see [Quick start](#quick-start)).
 
 ## Author and License
 
